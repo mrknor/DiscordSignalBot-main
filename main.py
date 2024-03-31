@@ -6,101 +6,136 @@ import discord
 from secret import Secret
 import asyncio
 from datetime import datetime, timedelta
+from polygon import WebSocketClient
+from polygon.websocket.models import WebSocketMessage
+from typing import List
+import asyncio
+from datetime import datetime, timedelta
+
+client = WebSocketClient("RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG") # hardcoded api_key is used
+# client = WebSocketClient()  # POLYGON_API_KEY environment variable is used
+
+# docs
+# https://polygon.io/docs/stocks/ws_stocks_am
+# https://polygon-api-client.readthedocs.io/en/latest/WebSocket.html#
+
+# aggregates (per minute)
+# client.subscribe("AM.*") # all aggregates
+client.subscribe("AM.TSLA") # single ticker
+
+# aggregates (per second)
+# client.subscribe("A.*")  # all aggregates
+# client.subscribe("A.TSLA") # single ticker
+
+# trades
+# client.subscribe("T.*")  # all trades
+# client.subscribe("T.TSLA", "T.UBER") # multiple tickers
+
+# quotes
+# client.subscribe("Q.*")  # all quotes
+# client.subscribe("Q.TSLA", "Q.UBER") # multiple tickers
+
+
+
+async def run_at_specific_time(task, hour, minute):
+    now = datetime.now()
+    target_time = datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
+    
+    # If the target time is already passed, schedule for the next day
+    if target_time < now:
+        target_time += timedelta(days=1)
+    
+    delay = (target_time - now).total_seconds()
+    # print(f"Waiting for {delay} seconds until {hour}:{minute} to run the task.")
+    
+    # await asyncio.sleep(delay)
+    await task()
+
+async def start_client():
+    print(f"Starting client at {datetime.now().time()}")
+    client.run(handle_msg)
+
+last_data_points = {}  # Dictionary to hold the last two data points for each ticker
+last_data_time = None  # Keeps track of the last data processing time
+aggregate_data = {}  # Temporary storage for the 5-minute aggregated data
+
+async def handle_msg(msgs: List[WebSocketMessage]):
+    global last_data_points, aggregate_data
+
+    for m in msgs:
+        # Extracting the necessary data from the message
+        ticker = m['ticker']
+        if ticker not in aggregate_data:
+            aggregate_data[ticker] = []
+
+        aggregate_data[ticker].append(m)
+
+        # Check if we have five data points to aggregate
+        if len(aggregate_data[ticker]) == 5:
+            # Aggregate the data points
+            aggregated_candle = aggregate_candles(aggregate_data[ticker])
+            # Clear the stored data points for this ticker
+            aggregate_data[ticker] = []
+
+            # If there's a previous data point to compare with, perform analysis
+            if ticker in last_data_points and last_data_points[ticker]:
+                previous_candle = last_data_points[ticker]
+                # Perform analysis for shorts and longs
+                analysis_result_short = analyze_for_shorts(previous_candle, aggregated_candle, ticker)
+                if analysis_result_short:
+                    message = format_message_short(analysis_result_short)
+                    await bot.get_channel(Secret.signal_channel_id).send(message)
+
+                analysis_result_long = analyze_for_longs(previous_candle, aggregated_candle, ticker)
+                if analysis_result_long:
+                    message = format_message_long(analysis_result_long)
+                    await bot.get_channel(Secret.signal_channel_id).send(message)
+
+            # Store the aggregated candle as the last data point for future comparison
+            last_data_points[ticker] = aggregated_candle
+
+def aggregate_candles(candles):
+    """
+    Aggregates five one-minute candles into a single five-minute candle.
+    """
+    # Initialize aggregation variables
+    open_price = candles[0]['o']
+    close_price = candles[-1]['c']
+    high_price = max(candle['h'] for candle in candles)
+    low_price = min(candle['l'] for candle in candles)
+    volume = sum(candle['v'] for candle in candles)
+    
+    # Calculate the weighted average price (optional, based on your needs)
+    # vw_sum = sum(candle['v'] * candle['vw'] for candle in candles)
+    # vw_avg = vw_sum / volume if volume else 0
+
+    # Construct the aggregated candle
+    aggregated_candle = {
+        'o': open_price,
+        'c': close_price,
+        'h': high_price,
+        'l': low_price,
+        'v': volume,
+        # 'vw': vw_avg,  # Include if needed
+    }
+
+    return aggregated_candle
+
+
+# Helper functions to format messages
+def format_message_short(analysis_result):
+    timestamp = datetime.fromtimestamp(analysis_result['data_point_2']['t'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+    return f"SHORT Alert: {analysis_result['ticker']}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
+
+def format_message_long(analysis_result):
+    timestamp = datetime.fromtimestamp(analysis_result['data_point_2']['t'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+    return f"LONG Alert: {analysis_result['ticker']}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
+
 
 intents = discord.Intents.default()
 intents.messages = True
 bot = commands.Bot(command_prefix='!', intents=intents)
-use_historical_data = True  # Set to False for live data
 
-
-# Schedule the task and start the bot
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user.name}')
-    check_and_alert.start()
-
-
-
-def fetch_ohlc_data(symbol, start_date, end_date, interval, api_key):
-    # Correcting interval and timespan
-    timespan = "day"  # For minute data
-    multiplier = "1"  # For 1-minute intervals
-    url = f"https://api.polygon.io/v2/aggs/ticker/{symbol}/range/{multiplier}/{timespan}/{start_date}/{end_date}?adjusted=true&sort=asc&apiKey={api_key}"
-    response = requests.get(url)
-    if response.status_code == 200:
-        return response.json()['results']
-    else:
-        print(f"Failed to fetch data for {symbol}: {response.text}")
-        return None
-
-
-
-@tasks.loop(count=1)
-async def check_and_alert():
-    api_key = "RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG"
-    symbols = ["SPY", "QQQ", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "AMD", "ZM", "WMT",
-       "JPM", "SPOT", "RBLX", "RDDT", "DIS", "NVDA", "ABNB", "PYPL", "SNAP", "IWM",
-       "ADBE", "NFLX", "HOOD"
-       ]
-    # symbols = ["RIVN"
-    #     ]
-    intervals = ["1"]  # Representing the intervals as needed by Polygon.io
-    
-    if use_historical_data:
-        start_date = "2024-03-27"  # Example start date for historical data
-        end_date = "2024-03-29"  # Example end date for historical data
-    else:
-        now = datetime.now(pytz.timezone('US/Eastern'))
-        start_date = end_date = now.strftime('%Y-%m-%d')
-    
-    # Loop through each symbol
-    for symbol in symbols:
-        # Check both intervals for each symbol
-        for interval_value in intervals:
-            # Fetch OHLC data for the current interval
-            ohlc_data = fetch_ohlc_data(symbol, start_date, end_date, interval_value, api_key)
-            if ohlc_data:
-
-                if use_historical_data:
-                    # Iterate through each data point for historical testing
-                    for i in range(0, len(ohlc_data) - 1):
-                        await process_data_point(ohlc_data[i], ohlc_data[i+1], symbol)
-
-                else:
-                    # For live data, process only the latest data point
-                    await process_data_point([ohlc_data[0], ohlc_data[1]], symbol)
-            await asyncio.sleep(3)
-    
-    print(f"No more symbols.")
-
-async def process_data_point(data_point_1, data_point_2, symbol):
-    print(f"Analyzing {symbol}...")
-    await asyncio.sleep(2)
-    print(f"Testing {symbol} short...")
-    await asyncio.sleep(2)
-    analysis_result = analyze_for_shorts(data_point_1, data_point_2, symbol)  # Assuming analyze_for_reversal expects a list of OHLC data points
-    if analysis_result:
-        timestamp = (datetime.fromtimestamp(data_point_2['t'] / 1000) + timedelta(days=1)).strftime('%m-%d-%Y')
-        message = f"SHORT Alert: {symbol}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
-        print(message)
-        await bot.get_channel(Secret.signal_channel_id).send(message)
-        await asyncio.sleep(2)
-    else:
-        print(f"No short detected.")
-        await asyncio.sleep(2)
-
-    print(f"Testing {symbol} long...")
-    await asyncio.sleep(2)
-    analysis_result_long = analyze_for_longs(data_point_1, data_point_2, symbol)  # Assuming analyze_for_reversal expects a list of OHLC data points
-    if analysis_result_long:
-        timestamp = (datetime.fromtimestamp(data_point_2['t'] / 1000) + timedelta(days=1)).strftime('%m-%d-%Y')
-        message = f"LONG Alert: {symbol}, Entry: {analysis_result_long['entry_point']}, Stop: MANAGE YOUR TRADE | {timestamp}"
-        print(message)
-        await bot.get_channel(Secret.signal_channel_id).send(message)
-        await asyncio.sleep(2)
-    else:
-        print(f"No long detected.")
-        await asyncio.sleep(2)
 
 def analyze_for_shorts(data_point_1, data_point_2, symbol):
     is_sender = False
@@ -165,5 +200,10 @@ def analyze_for_longs(data_point_1, data_point_2, symbol):
         }
     return None
 
-   
-bot.run(Secret.token)
+# Ensure this part is run inside an asyncio event loop
+async def main():
+    await run_at_specific_time(start_client, 7, 57)
+
+# Start the main coroutine
+if __name__ == "__main__":
+    asyncio.run(main())
