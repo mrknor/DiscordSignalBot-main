@@ -19,6 +19,9 @@ client = WebSocketClient("RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG") # hardcoded api_key
 # https://polygon.io/docs/stocks/ws_stocks_am
 # https://polygon-api-client.readthedocs.io/en/latest/WebSocket.html#
 
+#Time frame
+CANDLE_SIZE = 5
+
 # aggregates (per minute)
 # client.subscribe("AM.*") # all aggregates
 client.subscribe("AM.TSLA") # single ticker
@@ -62,6 +65,8 @@ aggregate_data = {}  # Temporary storage for the 5-minute aggregated data
 async def handle_msg(msgs: List[WebSocketMessage]):
     global last_data_points, aggregate_data
 
+
+
     for m in msgs:
         # Extracting the necessary data from the message
         ticker = m['ticker']
@@ -71,7 +76,7 @@ async def handle_msg(msgs: List[WebSocketMessage]):
         aggregate_data[ticker].append(m)
 
         # Check if we have five data points to aggregate
-        if len(aggregate_data[ticker]) == 5:
+        if len(aggregate_data[ticker]) == CANDLE_SIZE:
             # Aggregate the data points
             aggregated_candle = aggregate_candles(aggregate_data[ticker])
             # Clear the stored data points for this ticker
