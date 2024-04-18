@@ -12,6 +12,11 @@ from typing import List
 import asyncio
 from datetime import datetime, timedelta
 
+intents = discord.Intents.default()
+intents.messages = True
+bot = commands.Bot(command_prefix='!', intents=intents)
+
+
 client = WebSocketClient("RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG") # hardcoded api_key is used
 # client = WebSocketClient()  # POLYGON_API_KEY environment variable is used
 
@@ -20,11 +25,17 @@ client = WebSocketClient("RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG") # hardcoded api_key
 # https://polygon-api-client.readthedocs.io/en/latest/WebSocket.html#
 
 #Time frame
-CANDLE_SIZE = 5
+CANDLE_SIZE = 60
 
 # aggregates (per minute)
 # client.subscribe("AM.*") # all aggregates
-client.subscribe("AM.TSLA") # single ticker
+client.subscribe("AM.SPY") # single ticker
+client.subscribe("AM.QQQ") # single ticker
+# client.subscribe("AM.AAPL") # single ticker
+# client.subscribe("AM.TSLA") # single ticker
+# client.subscribe("AM.MSFT") # single ticker
+# client.subscribe("AM.AMZN") # single ticker
+# client.subscribe("AM.META") # single ticker
 
 # aggregates (per second)
 # client.subscribe("A.*")  # all aggregates
@@ -54,38 +65,28 @@ async def run_at_specific_time(task, hour, minute):
     # await asyncio.sleep(delay)
     await task()
 
-async def start_client():
-    print(f"Starting client at {datetime.now().time()}")
-    client.run(handle_msg)
-
-last_data_points = {}  # Dictionary to hold the last two data points for each ticker
+last_data_points = {} 
 last_data_time = None  # Keeps track of the last data processing time
 aggregate_data = {}  # Temporary storage for the 5-minute aggregated data
 
 async def handle_msg(msgs: List[WebSocketMessage]):
     global last_data_points, aggregate_data
 
-
-
-    for m in msgs:
-        # Extracting the necessary data from the message
-        ticker = m['ticker']
+    for equity_agg in msgs:
+        ticker = equity_agg.symbol
         if ticker not in aggregate_data:
             aggregate_data[ticker] = []
 
-        aggregate_data[ticker].append(m)
+        # Directly append the EquityAgg object instead of a dictionary
+        aggregate_data[ticker].append(equity_agg)
 
-        # Check if we have five data points to aggregate
+        # Once we have the required number of data points, we aggregate them
         if len(aggregate_data[ticker]) == CANDLE_SIZE:
-            # Aggregate the data points
             aggregated_candle = aggregate_candles(aggregate_data[ticker])
-            # Clear the stored data points for this ticker
-            aggregate_data[ticker] = []
+            aggregate_data[ticker] = []  # Reset after aggregation
 
-            # If there's a previous data point to compare with, perform analysis
-            if ticker in last_data_points and last_data_points[ticker]:
+            if ticker in last_data_points:
                 previous_candle = last_data_points[ticker]
-                # Perform analysis for shorts and longs
                 analysis_result_short = analyze_for_shorts(previous_candle, aggregated_candle, ticker)
                 if analysis_result_short:
                     message = format_message_short(analysis_result_short)
@@ -96,50 +97,41 @@ async def handle_msg(msgs: List[WebSocketMessage]):
                     message = format_message_long(analysis_result_long)
                     await bot.get_channel(Secret.signal_channel_id).send(message)
 
-            # Store the aggregated candle as the last data point for future comparison
             last_data_points[ticker] = aggregated_candle
 
-def aggregate_candles(candles):
-    """
-    Aggregates five one-minute candles into a single five-minute candle.
-    """
-    # Initialize aggregation variables
-    open_price = candles[0]['o']
-    close_price = candles[-1]['c']
-    high_price = max(candle['h'] for candle in candles)
-    low_price = min(candle['l'] for candle in candles)
-    volume = sum(candle['v'] for candle in candles)
-    
-    # Calculate the weighted average price (optional, based on your needs)
-    # vw_sum = sum(candle['v'] * candle['vw'] for candle in candles)
-    # vw_avg = vw_sum / volume if volume else 0
 
-    # Construct the aggregated candle
+def aggregate_candles(candles):
+    open_price = candles[0].open
+    close_price = candles[-1].close
+    high_price = max(candle.high for candle in candles)
+    low_price = min(candle.low for candle in candles)
+    volume = sum(candle.volume for candle in candles)
+    timestamp = candles[-1].end_timestamp
+
     aggregated_candle = {
         'o': open_price,
         'c': close_price,
         'h': high_price,
         'l': low_price,
         'v': volume,
-        # 'vw': vw_avg,  # Include if needed
+        't': timestamp
     }
 
     return aggregated_candle
 
 
-# Helper functions to format messages
+
 def format_message_short(analysis_result):
-    timestamp = datetime.fromtimestamp(analysis_result['data_point_2']['t'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+    # Directly use the provided timestamp for formatting
+    timestamp = datetime.fromtimestamp(analysis_result['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
     return f"SHORT Alert: {analysis_result['ticker']}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
 
 def format_message_long(analysis_result):
-    timestamp = datetime.fromtimestamp(analysis_result['data_point_2']['t'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+    # Similarly adjust for the long message formatting
+    timestamp = datetime.fromtimestamp(analysis_result['timestamp'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
     return f"LONG Alert: {analysis_result['ticker']}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
 
 
-intents = discord.Intents.default()
-intents.messages = True
-bot = commands.Bot(command_prefix='!', intents=intents)
 
 
 def analyze_for_shorts(data_point_1, data_point_2, symbol):
@@ -169,9 +161,11 @@ def analyze_for_shorts(data_point_1, data_point_2, symbol):
         return {
             'ticker': symbol,
             'entry_point': entry_point,
-            'stop_loss': recent_candle['h']
+            'stop_loss': recent_candle['h'],  # Assuming this is how you access high price
+            'timestamp': recent_candle['t']  # Include the timestamp from the aggregated candle
         }
     return None
+
 
 
 def analyze_for_longs(data_point_1, data_point_2, symbol):
@@ -201,14 +195,22 @@ def analyze_for_longs(data_point_1, data_point_2, symbol):
         return {
             'ticker': symbol,
             'entry_point': entry_point,
-            'stop_loss': recent_candle['l']
+            'stop_loss': recent_candle['h'],  # Assuming this is how you access high price
+            'timestamp': recent_candle['t']  # Include the timestamp from the aggregated candle
         }
     return None
 
-# Ensure this part is run inside an asyncio event loop
-async def main():
-    await run_at_specific_time(start_client, 7, 57)
 
-# Start the main coroutine
+@bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user.name}')
+    # Schedule the WebSocket client connection without blocking the on_ready event
+    asyncio.create_task(run_at_specific_time(start_client, 7, 57))
+
+async def start_client():
+    print(f"Starting WebSocket client at {datetime.now().time()}")
+    # Ensure that this async function properly handles the WebSocket connection
+    await client.connect(handle_msg)
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    bot.run(Secret.token)
