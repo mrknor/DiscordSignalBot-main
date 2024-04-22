@@ -68,7 +68,7 @@ async def handle_msg(msgs: List[WebSocketMessage]):
     global last_data_points, aggregate_data
 
     for equity_agg in msgs:
-        ticker = equity_agg['ticker']
+        ticker = equity_agg.symbol
 
         for size in CANDLE_SIZES:
             if ticker not in aggregate_data[size]:
@@ -103,6 +103,7 @@ async def handle_msg(msgs: List[WebSocketMessage]):
                 last_data_points[ticker][size] = aggregated_candle
 
                 print(f"{ticker} aggregated data for {size}-minute candle: {aggregated_candle} {datetime.now()}")
+
 
 
 
@@ -179,6 +180,7 @@ def analyze_for_shorts(data_point_1, data_point_2, symbol):
             'timestamp': recent_candle['t']  # Include the timestamp from the aggregated candle
         }
     return None
+
 
 
 
