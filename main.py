@@ -71,6 +71,10 @@ async def handle_msg(msgs: List[WebSocketMessage]):
         ticker = equity_agg.symbol
 
         for size in CANDLE_SIZES:
+
+            # if size == 5 and ticker not in ['SPY', 'QQQ']:
+            #     continue  # Skip 5-minute processing for all except SPY and QQQ
+
             if ticker not in aggregate_data[size]:
                 aggregate_data[size][ticker] = []
 
@@ -105,15 +109,13 @@ async def handle_msg(msgs: List[WebSocketMessage]):
                 print(f"{ticker} aggregated data for {size}-minute candle: {aggregated_candle} {datetime.now()}")
 
 
-
-
 def aggregate_candles(candles):
-    open_price = candles[0]['o']
-    close_price = candles[-1]['c']
-    high_price = max(candle['h'] for candle in candles)
-    low_price = min(candle['l'] for candle in candles)
-    volume = sum(candle['v'] for candle in candles)
-    timestamp = candles[-1]['t']
+    open_price = candles[0].open
+    close_price = candles[-1].close
+    high_price = max(candle.high for candle in candles)
+    low_price = min(candle.low for candle in candles)
+    volume = sum(candle.volume for candle in candles)
+    timestamp = candles[-1].end_timestamp
 
     aggregated_candle = {
         'o': open_price,
@@ -180,8 +182,6 @@ def analyze_for_shorts(data_point_1, data_point_2, symbol):
             'timestamp': recent_candle['t']  # Include the timestamp from the aggregated candle
         }
     return None
-
-
 
 
 def analyze_for_longs(data_point_1, data_point_2, symbol):
