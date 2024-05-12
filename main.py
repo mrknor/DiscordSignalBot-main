@@ -24,44 +24,16 @@ client = WebSocketClient("RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG") # hardcoded api_key
 # https://polygon-api-client.readthedocs.io/en/latest/WebSocket.html#
 
 
-CANDLE_SIZES = [6, 55]
+CANDLE_SIZES = [3, 6]
 aggregate_data = {size: {} for size in CANDLE_SIZES}
 last_data_points = {} 
 last_data_time = None 
+utc = timezone('UTC')
+central = timezone('US/Central')
+
 
 # aggregates (per minute)
-# client.subscribe("AM.*") # all aggregates
 client.subscribe("AM.SPY") # single ticker
-# client.subscribe("AM.QQQ") # single ticker
-# client.subscribe("AM.AAPL") # single ticker
-# client.subscribe("AM.TSLA") # single ticker
-# client.subscribe("AM.MSFT") # single ticker
-# client.subscribe("AM.AMZN") # single ticker
-# client.subscribe("AM.META") # single ticker
-# client.subscribe("AM.IWM") # single ticker
-# client.subscribe("AM.NVDA") # single ticker
-# client.subscribe("AM.JPM") # single ticker
-# client.subscribe("AM.ABNB") # single ticker
-# client.subscribe("AM.AMD") # single ticker
-
-# aggregates (per second)
-# client.subscribe("A.*")  # all aggregates
-# client.subscribe("A.TSLA") # single ticker
-
-
-async def run_at_specific_time(task, hour, minute):
-    now = datetime.now()
-    target_time = datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
-    
-    # If the target time is already passed, schedule for the next day
-    if target_time < now:
-        target_time += timedelta(days=1)
-    
-    delay = (target_time - now).total_seconds()
-    # print(f"Waiting for {delay} seconds until {hour}:{minute} to run the task.")
-    
-    # await asyncio.sleep(delay)
-    await task()
 
 
 async def handle_msg(msgs: List[WebSocketMessage]):
@@ -129,8 +101,6 @@ def aggregate_candles(candles):
     return aggregated_candle
 
 
-utc = timezone('UTC')
-central = timezone('US/Central')
 
 def format_message_short(analysis_result, candle_size, volume):
     volume_text = "[VC]" if volume else ""
