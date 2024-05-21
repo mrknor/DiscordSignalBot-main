@@ -24,7 +24,7 @@ client = WebSocketClient("RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG") # hardcoded api_key
 # https://polygon-api-client.readthedocs.io/en/latest/WebSocket.html#
 
 
-CANDLE_SIZES = [6, 55]
+CANDLE_SIZES = [3, 55]
 aggregate_data = {size: {} for size in CANDLE_SIZES}
 last_data_points = {} 
 last_data_time = None 
@@ -78,31 +78,32 @@ async def handle_msg(msgs, symbol):
 
             if len(aggregate_data[size][ticker]) == size:
                 aggregated_candle = aggregate_candles(aggregate_data[size][ticker])
-                aggregate_data[size][ticker] = []  # Reset after aggregation
-
-                if ticker in last_data_points and size in last_data_points[ticker]:
-                    previous_candle = last_data_points[ticker][size]
-
-                    # Analyze for shorts and check volume
-                    analysis_result_short = analyze_for_shorts(previous_candle, aggregated_candle, ticker)
-                    if analysis_result_short:
-                        volume = aggregated_candle['v'] > previous_candle['v']
-                        message = format_message_short(analysis_result_short, size, volume)
-                        await bot.get_channel(Secret.signal_channel_id).send(message)
-
-                    # Analyze for longs and check volume
-                    analysis_result_long = analyze_for_longs(previous_candle, aggregated_candle, ticker)
-                    if analysis_result_long:
-                        volume = aggregated_candle['v'] > previous_candle['v']
-                        message = format_message_long(analysis_result_long, size, volume)  # Correct variable reference
-                        await bot.get_channel(Secret.signal_channel_id).send(message)
 
                 # Update last data points
                 if ticker not in last_data_points:
                     last_data_points[ticker] = {}
-                last_data_points[ticker][size] = aggregated_candle
+                if size not in last_data_points[ticker]:
+                    last_data_points[ticker][size] = []
 
-                print(f"{ticker} aggregated data for {size}-minute candle: {aggregated_candle} {datetime.now()}")
+                last_data_points[ticker][size].append(aggregated_candle)
+
+                # Detect FVG only when there are at least 3 candles in history
+                if len(last_data_points[ticker][size]) >= 3:
+                    # Detect FVG in the last three candles
+                    fvg = detect_fvg(last_data_points[ticker][size][-3:])
+                    if fvg:
+                        timestamp = datetime.fromtimestamp(last_data_points[ticker][size][-1]['t'] / 1000).strftime('%Y-%m-%d %H:%M:%S')
+                        message = f"{size}M {fvg['type']} Fair Value Gap detected for {ticker} with size {fvg['size']:.2f} at {timestamp}"
+                        # await bot.get_channel(Secret.signal_channel_id).send(message)
+                        print(message)
+
+                # Keep only the last 3 candles in memory to check for FVG
+                last_data_points[ticker][size] = last_data_points[ticker][size][-3:]
+
+                # Reset aggregate data for the current size after processing
+                aggregate_data[size][ticker] = []
+
+                # print(f"{ticker} aggregated data for {size}-minute candle: {aggregated_candle} {datetime.now()}")
 
 
 
@@ -214,6 +215,23 @@ def analyze_for_longs(data_point_1, data_point_2, symbol):
         }
     return None
 
+# Function to detect fair value gaps
+def detect_fvg(candles):
+    if len(candles) < 3:
+        return None
+
+    first, middle, third = candles[-3], candles[-2], candles[-1]
+    fvg_size = 0
+    if middle['o'] < middle['c']:  # Bullish candle
+        fvg_size = third['l'] - first['h']
+        if fvg_size > 0.06:
+            return {'type': 'Bullish', 'size': fvg_size}
+    elif middle['o'] > middle['c']:  # Bearish candle
+        fvg_size = first['l'] - third['h']
+        if fvg_size > 0.06:
+            return {'type': 'Bearish', 'size': fvg_size}
+    return None
+
 async def fetch_historical_minute_data(symbol, start_date, end_date, interval, api_key):
     # Assuming API allows fetching minute-level data
     timespan = "minute"  
@@ -229,8 +247,8 @@ async def fetch_historical_minute_data(symbol, start_date, end_date, interval, a
 async def simulate_real_time_data():
     api_key = "RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG"
     symbols = ["SPY"]
-    start_date = "2024-04-18"
-    end_date = "2024-04-18"
+    start_date = "2024-05-20"
+    end_date = "2024-05-20"
     interval = "minute"
 
     for symbol in symbols:
