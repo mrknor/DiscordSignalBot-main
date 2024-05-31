@@ -12,207 +12,67 @@ from typing import List
 import asyncio
 from datetime import datetime, timedelta
 from pytz import timezone
+import numpy as np
+from scipy.signal import argrelextrema
+
 
 intents = discord.Intents.default()
 intents.messages = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-client = WebSocketClient("RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG") # hardcoded api_key is used
-
-# docs
-# https://polygon.io/docs/stocks/ws_stocks_am
-# https://polygon-api-client.readthedocs.io/en/latest/WebSocket.html#
-
-
-CANDLE_SIZES = [6, 55]
-aggregate_data = {size: {} for size in CANDLE_SIZES}
-last_data_points = {} 
-last_data_time = None 
-
-# aggregates (per minute)
-# client.subscribe("AM.*") # all aggregates
-# client.subscribe("AM.SPY") # single ticker
-# client.subscribe("AM.QQQ") # single ticker
-# client.subscribe("AM.AAPL") # single ticker
-# client.subscribe("AM.TSLA") # single ticker
-# client.subscribe("AM.MSFT") # single ticker
-# client.subscribe("AM.AMZN") # single ticker
-# client.subscribe("AM.META") # single ticker
-# client.subscribe("AM.IWM") # single ticker
-# client.subscribe("AM.NVDA") # single ticker
-# client.subscribe("AM.JPM") # single ticker
-# client.subscribe("AM.ABNB") # single ticker
-# client.subscribe("AM.AMD") # single ticker
-
-# aggregates (per second)
-# client.subscribe("A.*")  # all aggregates
-# client.subscribe("A.TSLA") # single ticker
-
-
-async def run_at_specific_time(task, hour, minute):
-    now = datetime.now()
-    target_time = datetime.now().replace(hour=hour, minute=minute, second=0, microsecond=0)
-    
-    # If the target time is already passed, schedule for the next day
-    if target_time < now:
-        target_time += timedelta(days=1)
-    
-    delay = (target_time - now).total_seconds()
-    # print(f"Waiting for {delay} seconds until {hour}:{minute} to run the task.")
-    
-    # await asyncio.sleep(delay)
-    await task()
-
-
-async def handle_msg(msgs, symbol):
-    global last_data_points, aggregate_data
-
-    for equity_agg in msgs:
-        ticker = symbol
-
-        for size in CANDLE_SIZES:
-            if ticker not in aggregate_data[size]:
-                aggregate_data[size][ticker] = []
-
-            aggregate_data[size][ticker].append(equity_agg)
-
-            if len(aggregate_data[size][ticker]) == size:
-                aggregated_candle = aggregate_candles(aggregate_data[size][ticker])
-                aggregate_data[size][ticker] = []  # Reset after aggregation
-
-                if ticker in last_data_points and size in last_data_points[ticker]:
-                    previous_candle = last_data_points[ticker][size]
-
-                    # Analyze for shorts and check volume
-                    analysis_result_short = analyze_for_shorts(previous_candle, aggregated_candle, ticker)
-                    if analysis_result_short:
-                        volume = aggregated_candle['v'] > previous_candle['v']
-                        message = format_message_short(analysis_result_short, size, volume)
-                        await bot.get_channel(Secret.signal_channel_id).send(message)
-
-                    # Analyze for longs and check volume
-                    analysis_result_long = analyze_for_longs(previous_candle, aggregated_candle, ticker)
-                    if analysis_result_long:
-                        volume = aggregated_candle['v'] > previous_candle['v']
-                        message = format_message_long(analysis_result_long, size, volume)  # Correct variable reference
-                        await bot.get_channel(Secret.signal_channel_id).send(message)
-
-                # Update last data points
-                if ticker not in last_data_points:
-                    last_data_points[ticker] = {}
-                last_data_points[ticker][size] = aggregated_candle
-
-                print(f"{ticker} aggregated data for {size}-minute candle: {aggregated_candle} {datetime.now()}")
+candlestick_data = {}
 
 
 
-def aggregate_candles(candles):
-    open_price = candles[0]['o']
-    close_price = candles[-1]['c']
-    high_price = max(candle['h'] for candle in candles)
-    low_price = min(candle['l'] for candle in candles)
-    volume = sum(candle['v'] for candle in candles)
-    timestamp = candles[-1]['t']
+# Function to determine directional bias
+def determine_directional_bias(data):
+    if data['current_price'] > data['yesterday_close']:
+        return 'Bullish', data['low']  # swing low in bullish scenario
+    else:
+        return 'Bearish', data['high']  # swing high in bearish scenario
 
-    aggregated_candle = {
-        'o': open_price,
-        'c': close_price,
-        'h': high_price,
-        'l': low_price,
-        'v': volume,
-        't': timestamp
+
+def calculate_fibonacci_levels(high, low):
+    """Calculates Fibonacci retracement levels between a high and a low."""
+    diff = high - low
+    return {
+        '0': high,
+        '0.5': low + 0.5 * diff,
+        '0.62': low + 0.618 * diff,
+        '0.705': low + 0.705 * diff,
+        '0.79': low + 0.79 * diff,
+        '1': low
     }
 
-    return aggregated_candle
-
-
-utc = timezone('UTC')
-central = timezone('US/Central')
-
-def format_message_short(analysis_result, candle_size, volume):
-    volume_text = "[VC]" if volume else ""
-
-    # Convert UTC timestamp to Central Time
-    utc_dt = datetime.fromtimestamp(analysis_result['timestamp'] / 1000, utc)
-    central_dt = utc_dt.astimezone(central)
-    timestamp = central_dt.strftime('%Y-%m-%d %H:%M:%S')
-    return f"{volume_text}[{candle_size} Minute] SHORT Alert: {analysis_result['ticker']}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
-
-def format_message_long(analysis_result, candle_size, volume):
-    volume_text = "[VC]" if volume else ""
-
-    # Similarly adjust for the long message formatting
-    utc_dt = datetime.fromtimestamp(analysis_result['timestamp'] / 1000, utc)
-    central_dt = utc_dt.astimezone(central)
-    timestamp = central_dt.strftime('%Y-%m-%d %H:%M:%S')
-    return f"{volume_text}[{candle_size} Minute] LONG Alert: {analysis_result['ticker']}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
-
-
-def analyze_for_shorts(data_point_1, data_point_2, symbol):
-    is_sender = False
-    recent_candle = data_point_2
-    prev_candle = data_point_1
-    
-    # Determine if the last candle is a sender candle
-    
-    if recent_candle['h'] > prev_candle['h']: # and recent_candle['v'] > prev_candle['v']
-        #green candle first
-        #red candle secondary
-        if recent_candle['c'] < recent_candle['o']:
-            if recent_candle['c'] < prev_candle['c']:
-                entry_point = recent_candle['o']
-                is_sender = True
-            if recent_candle['l'] < prev_candle['l']:
-                is_sender = False
-        #green candle secondary
-        if recent_candle['c'] > recent_candle['o']:
-            if recent_candle['c'] < prev_candle['c']:
-                entry_point = recent_candle['c']
-                is_sender = True
-            if recent_candle['l'] < prev_candle['l']:
-                is_sender = False
-    if is_sender:
-        return {
-            'ticker': symbol,
-            'entry_point': entry_point,
-            'stop_loss': recent_candle['h'],  # Assuming this is how you access high price
-            'timestamp': recent_candle['t']  # Include the timestamp from the aggregated candle
-        }
-    return None
+def check_breakouts_and_ote(bias, swing_highs, swing_lows, current_price):
+    """Check for breakouts and calculate Optimal Trade Entry (OTE) based on Fibonacci levels."""
+    if bias == 'Bullish' and swing_lows:
+        last_low = swing_lows[-1]
+        if swing_highs:  # Make sure there is at least one swing high to calculate from
+            last_high = swing_highs[-1]
+            fib_levels = calculate_fibonacci_levels(last_high['h'], last_low['l'])
+            # Check if current price is within the OTE zone
+            if fib_levels['0.62'] <= current_price <= fib_levels['0.79']:
+                ote = fib_levels['0.79']  # Use the upper boundary of the OTE zone for entry
+                return True, ote
+    elif bias == 'Bearish' and swing_highs:
+        last_high = swing_highs[-1]
+        if swing_lows:  # Make sure there is at least one swing low to calculate from
+            last_low = swing_lows[-1]
+            fib_levels = calculate_fibonacci_levels(last_high['h'], last_low['l'])
+            # Check if current price is within the OTE zone
+            if fib_levels['0.79'] >= current_price >= fib_levels['0.62']:
+                ote = fib_levels['0.79']  # Use the lower boundary of the OTE zone for entry
+                return True, ote
+    return False, None
 
 
 
-def analyze_for_longs(data_point_1, data_point_2, symbol):
-    is_sender = False
-    recent_candle = data_point_2
-    prev_candle = data_point_1
-    
-    # Determine if the last candle is a sender candle
-    
-    if recent_candle['l'] < prev_candle['l'] : # and recent_candle['v'] > prev_candle['v']
-        #red candle first
-        #green candle secondary
-        if recent_candle['o'] < recent_candle['c']:
-            if recent_candle['c'] < prev_candle['o']:
-                entry_point = prev_candle['h']
-                is_sender = True
-            if recent_candle['h'] > prev_candle['h']:
-                is_sender = False
-        #red candle secondary
-        if recent_candle['o'] > recent_candle['c']:
-            if recent_candle['c'] > prev_candle['c']:
-                entry_point = prev_candle['h']
-                is_sender = True
-            if recent_candle['h'] > prev_candle['h']:
-                is_sender = False
-    if is_sender:
-        return {
-            'ticker': symbol,
-            'entry_point': entry_point,
-            'stop_loss': recent_candle['h'],  # Assuming this is how you access high price
-            'timestamp': recent_candle['t']  # Include the timestamp from the aggregated candle
-        }
-    return None
+# Function to send a signal to Discord
+async def send_signal_to_discord(message):
+    channel = bot.get_channel(Secret.signal_channel_id)
+    await channel.send(message)
+
 
 async def fetch_historical_minute_data(symbol, start_date, end_date, interval, api_key):
     # Assuming API allows fetching minute-level data
@@ -226,30 +86,85 @@ async def fetch_historical_minute_data(symbol, start_date, end_date, interval, a
         print(f"Failed to fetch data for {symbol}: {response.text}")
         return []
 
-async def simulate_real_time_data():
+
+
+def find_swing_points(data, window_size=5):
+    highs = [data[i]['h'] for i in range(len(data))]
+    lows = [data[i]['l'] for i in range(len(data))]
+    max_indices = argrelextrema(np.array(highs), np.greater_equal, order=window_size)[0]
+    min_indices = argrelextrema(np.array(lows), np.less_equal, order=window_size)[0]
+    swing_highs = [data[i] for i in max_indices]
+    swing_lows = [data[i] for i in min_indices]
+    return swing_highs, swing_lows
+
+def determine_market_bias(swing_highs, swing_lows):
+    """Determine market bias based on recent swing highs and swing lows."""
+    if not swing_highs or not swing_lows:
+        return 'Neutral'  # Not enough data to determine bias
+
+    # Check the most recent swings to determine the trend
+    if len(swing_highs) > 1 and len(swing_lows) > 1:
+        # Compare the last two swing highs and the last two swing lows
+        recent_high_trend = swing_highs[-1]['h'] > swing_highs[-2]['h']
+        recent_low_trend = swing_lows[-1]['l'] > swing_lows[-2]['l']
+
+        if recent_high_trend and recent_low_trend:
+            return 'Bullish'
+        elif not recent_high_trend and not recent_low_trend:
+            return 'Bearish'
+
+    # If trends are mixed or not enough historical swings, consider the trend neutral or uncertain
+    return 'Neutral'
+
+
+
+
+@tasks.loop(minutes=1)
+async def market_check():
     api_key = "RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG"
     symbols = ["SPY"]
-    start_date = "2024-04-18"
-    end_date = "2024-04-18"
-    interval = "minute"
+    start_date = "2024-04-29"
+    end_date = "2024-05-10"
 
     for symbol in symbols:
-        historical_data = await fetch_historical_minute_data(symbol, start_date, end_date, interval, api_key)
+        if symbol not in candlestick_data:
+            candlestick_data[symbol] = []
+
+        print(f"Fetching historical minute data for {symbol}.")
+        # Fetch minute-level data for the specified date range
+        historical_data = await fetch_historical_minute_data(symbol, start_date, end_date, "minute", api_key)
+        
+        # Process each minute data point
         for data_point in historical_data:
-            # Process each minute data as if it's coming in real-time
-            await handle_msg([data_point], symbol)
+            candlestick_data[symbol].append(data_point)
+
+            if len(candlestick_data[symbol]) > 10:
+                swing_highs, swing_lows = find_swing_points(candlestick_data[symbol])
+                current_data = candlestick_data[symbol][-1]
+                current_price = current_data['c']
+                current_time = datetime.fromtimestamp(current_data['t'] / 1000).strftime('%Y-%m-%d %H:%M')
+
+
+                # Determine market bias based on the latest price action
+                bias = determine_market_bias(swing_highs, swing_lows)
+
+                breakout, ote = check_breakouts_and_ote(bias, swing_highs, swing_lows, current_price)
+                if breakout:
+                    message = f"{current_time} - {bias} breakout detected at OTE: {ote:.2f}. Current price: {current_price}"
+                    # await send_signal_to_discord(message)
+                    print(message)
+
+            if len(candlestick_data[symbol]) > 30:
+                candlestick_data[symbol] = candlestick_data[symbol][-30:]
+
+        print("Market check task completed.")
+
+    
 
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user.name}')
-    # Start the simulation when the bot is ready
-    asyncio.create_task(simulate_real_time_data())
-
-async def start_client():
-    print(f"Starting WebSocket client at {datetime.now().time()}")
-    # Ensure that this async function properly handles the WebSocket connection
-    await client.connect(handle_msg)
+    market_check.start()  # Start the market check loop when the bot is ready
 
 if __name__ == "__main__":
     bot.run(Secret.token)
-
