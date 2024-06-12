@@ -8,10 +8,13 @@ import asyncio
 from datetime import datetime, timedelta
 from sentiment_analysis import get_headlines_and_sentiments
 import numpy as np  # for numerical operations
+from database import create_tables, save_signal, update_signal
 
 intents = discord.Intents.default()
 intents.messages = True
 bot = commands.Bot(command_prefix='!', intents=intents)
+
+create_tables()
 
 # Calculate the next 2:45 PM CST
 def start_time():
@@ -55,15 +58,15 @@ def fetch_ohlc_data(symbol, start_date, end_date, interval, api_key):
 @tasks.loop(count=1)
 async def check_and_alert():
     api_key = "RG34KJaw5GqpozaHArfsZ7I2P5kAVlmG"
-    symbols = [
-        "SPY", "QQQ", "AAPL", "TSLA", "MSFT", "GOOGL", "AMZN", "META", "AMD", "ZM", 
-        "WMT", "JPM", "SPOT", "RBLX", "RDDT", "DIS", "NVDA", "ABNB", "PYPL", 
-        "SNAP", "IWM", "ADBE", "NFLX", "HOOD"
-    ]
     # symbols = [
-    #     "TSLA"
+    #     "SPY", "QQQ", "AAPL", "TSLA", "MSFT", "GOOGL", "AMZN", "META", "AMD", "ZM", 
+    #     "WMT", "JPM", "SPOT", "RBLX", "RDDT", "DIS", "NVDA", "ABNB", "PYPL", 
+    #     "SNAP", "IWM", "ADBE", "NFLX", "HOOD"
     # ]
-    backtest_mode = False  # Set to True for backtesting, False for live alerts
+    symbols = [
+        "TSLA"
+    ]
+    backtest_mode = True  # Set to True for backtesting, False for live alerts
     backtest_days = 100   # Number of days to backtest
 
     # Define Eastern Time Zone
@@ -134,13 +137,17 @@ async def process_data_point(data_point_1, data_point_2, symbol):
             timestamp = (datetime.fromtimestamp(data_point_2['t'] / 1000) + timedelta(days=1)).strftime('%m-%d-%Y')
             message = f"{tag}Daily Swing SHORT Alert: {symbol}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
             print(message)
-            await bot.get_channel(Secret.signal_channel_id).send(message)
+            # await bot.get_channel(Secret.signal_channel_id).send(message)
+            save_signal(symbol, 'SHORT', analysis_result['entry_point'], analysis_result['stop_loss'], average_sentiment, take_profit=None)
+        
         else:
             print(f"No sentiment scores available for {symbol}.")
             timestamp = (datetime.fromtimestamp(data_point_2['t'] / 1000) + timedelta(days=1)).strftime('%m-%d-%Y')
             message = f"Daily Swing SHORT Alert: {symbol}, Entry: {analysis_result['entry_point']}, Stop: {analysis_result['stop_loss']} | {timestamp}"
             print(message)
-            await bot.get_channel(Secret.signal_channel_id).send(message)
+            # await bot.get_channel(Secret.signal_channel_id).send(message)
+            save_signal(symbol, 'SHORT', analysis_result['entry_point'], analysis_result['stop_loss'], None, take_profit=None)
+    
     else:
         print(f"No short detected.")
         
@@ -159,13 +166,17 @@ async def process_data_point(data_point_1, data_point_2, symbol):
             timestamp = (datetime.fromtimestamp(data_point_2['t'] / 1000) + timedelta(days=1)).strftime('%m-%d-%Y')
             message = f"{tag}Daily Swing LONG Alert: {symbol}, Entry: {analysis_result_long['entry_point']}, Stop: MANAGE YOUR TRADE | {timestamp}"
             print(message)
-            await bot.get_channel(Secret.signal_channel_id).send(message)
+            # await bot.get_channel(Secret.signal_channel_id).send(message)
+            save_signal(symbol, 'LONG', analysis_result_long['entry_point'], analysis_result_long['stop_loss'], average_sentiment, take_profit=None)
+    
         else:
             print(f"No sentiment scores available for {symbol}.")
             timestamp = (datetime.fromtimestamp(data_point_2['t'] / 1000) + timedelta(days=1)).strftime('%m-%d-%Y')
             message = f"Daily Swing LONG Alert: {symbol}, Entry: {analysis_result_long['entry_point']}, Stop: MANAGE YOUR TRADE | {timestamp}"
             print(message)
-            await bot.get_channel(Secret.signal_channel_id).send(message)
+            # await bot.get_channel(Secret.signal_channel_id).send(message)
+            save_signal(symbol, 'LONG', analysis_result_long['entry_point'], analysis_result_long['stop_loss'], None, take_profit=None)
+
     else:
         print(f"No long detected.")
 
