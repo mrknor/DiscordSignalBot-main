@@ -5,6 +5,7 @@ from database import fetch_open_signals, update_signal, update_signal_stop_loss
 from secret import Secret
 import discord
 from pytz import timezone
+from click_trader import setup_and_click
 
 utc = timezone('UTC')
 central = timezone('US/Central')
@@ -36,10 +37,12 @@ async def check_and_update_signals(bot, equity_agg):
                     signal.total_profit = round(signal.stop_loss - signal.entry_point, 2)
                     await send_stoploss_hit_message(signal)
                     update_signal(signal.id, signal.total_profit, is_open=False, invalidated=1)
+                    setup_and_click('SHORT')  # Execute trade to close long position
                 elif latest_price >= signal.take_profit:
                     signal.total_profit = round(signal.take_profit - signal.entry_point, 2)
                     await send_take_profit_hit_message(signal)
                     update_signal(signal.id, signal.total_profit, is_open=False, invalidated=1)
+                    setup_and_click('SHORT')  # Execute trade to close long position
                 elif latest_price - signal.entry_point >= risk:
                     signal.stop_loss = signal.entry_point  # Move stop loss to break even
                     update_signal_stop_loss(signal.id, signal.entry_point)
@@ -48,10 +51,12 @@ async def check_and_update_signals(bot, equity_agg):
                     signal.total_profit = round(signal.entry_point - signal.stop_loss, 2)
                     await send_stoploss_hit_message(signal)
                     update_signal(signal.id, signal.total_profit, is_open=False, invalidated=1)
+                    setup_and_click('LONG')  # Execute trade to close short position
                 elif latest_price <= signal.take_profit:
                     signal.total_profit = round(signal.entry_point - signal.take_profit, 2)
                     await send_take_profit_hit_message(signal)
                     update_signal(signal.id, signal.total_profit, is_open=False, invalidated=1)
+                    setup_and_click('LONG')  # Execute trade to close short position
                 elif signal.entry_point - latest_price >= risk:
                     signal.stop_loss = signal.entry_point  # Move stop loss to break even
                     update_signal_stop_loss(signal.id, signal.entry_point)
