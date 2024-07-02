@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 import pytz
-from database import fetch_open_signals, update_signal, update_signal_stop_loss
+from database import fetch_open_signals, update_signal, update_signal_stop_loss, save_message
 from secret import Secret
 import discord
 from pytz import timezone
@@ -79,18 +79,22 @@ async def check_and_update_signals(bot, equity_agg):
 async def send_stoploss_hit_message(signal):
     message = f"STOPLOSS HIT [{signal.symbol}] at {signal.stop_loss} for total loss of {signal.total_profit:.2f} | {timestamp}"
     await channel.send(message)
+    save_message(message)
 
 async def send_filled_message(signal):
     message = f"FILLED {signal.signal_type} [{signal.symbol}] at {signal.entry_point} | {timestamp}"
     await channel.send(message)
+    save_message(message)
 
 async def send_invalidated_message(signal):
     message = f"INVALIDATED {signal.signal_type} [{signal.symbol}] at {signal.invalidated_price} | {timestamp}"
     await channel.send(message)
+    save_message(message)
 
 async def send_take_profit_hit_message(signal):
     message = f"TAKE PROFIT HIT [{signal.symbol}] at {signal.take_profit} for a total profit of {signal.total_profit:.2f} | {timestamp}"
     await channel.send(message)
+    save_message(message)
 
 async def send_six_minute_update(bot, latest_price):
     await init_globals(bot)  # Initialize global variables
@@ -99,5 +103,6 @@ async def send_six_minute_update(bot, latest_price):
     for signal in signals:
         pl = round((latest_price - signal.entry_point), 2) if signal.signal_type == 'LONG' else round((signal.entry_point - latest_price), 2)
 
-        message = f"6 MINUTE UPDATE [{signal.symbol}] P/L: {pl:.2f} | {timestamp}"
+        message = f"TRADE UPDATE [{signal.symbol}] {signal.signal_type} P/L: {pl:.2f} | {timestamp}"
         await channel.send(message)
+        save_message(message)

@@ -1,13 +1,8 @@
 import pyodbc
 from datetime import datetime
+from secret import Secret
 
-# SQL Server connection settings
-server = 'DESKTOP-CG6FTM1'
-database = 'Stocks'
-username = ''
-password = ''
-connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={server};DATABASE={database};Trusted_Connection=yes;'
-
+connection_string = f'DRIVER={{ODBC Driver 17 for SQL Server}};SERVER={Secret.server};DATABASE={Secret.database};UID={Secret.username};PWD={Secret.password};Encrypt=yes;TrustServerCertificate=no;Connection Timeout=30;'
 def create_connection():
     return pyodbc.connect(connection_string)
 
@@ -103,3 +98,13 @@ def update_signal_stop_loss(signal_id, new_stop_loss):
             WHERE id = ?
         ''', (new_stop_loss, signal_id))
         conn.commit()
+
+def save_message(message):
+    with create_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO signal_messages (message)
+            VALUES (?)
+        ''', (message,))
+        conn.commit()
+

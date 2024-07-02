@@ -7,7 +7,7 @@ from polygon import WebSocketClient
 from polygon.websocket.models import WebSocketMessage
 from typing import List
 from pytz import timezone
-from database import save_signal
+from database import save_signal, save_message
 from check_signals import check_and_update_signals, send_six_minute_update  # Import the new methods
 from click_trader import setup_and_click, open_trading_page
 
@@ -66,6 +66,7 @@ async def handle_msg(msgs: List[WebSocketMessage]):
                         await bot.get_channel(Secret.signal_channel_id).send(message)
                         save_signal(ticker, 'SHORT', analysis_result_short['entry_point'], analysis_result_short['stop_loss'], analysis_result_short['invalidated_price'], None, volume, take_profit=None)
                         setup_and_click('SHORT')  # Add this line to execute the trade
+                        save_message(message)
 
                     # Analyze for longs and check volume
                     analysis_result_long = analyze_for_longs(previous_candle, aggregated_candle, ticker)
@@ -75,6 +76,7 @@ async def handle_msg(msgs: List[WebSocketMessage]):
                         await bot.get_channel(Secret.signal_channel_id).send(message)
                         save_signal(ticker, 'LONG', analysis_result_long['entry_point'], analysis_result_long['stop_loss'], analysis_result_long['invalidated_price'], None, volume, take_profit=None)
                         setup_and_click('LONG')  # Add this line to execute the trade
+                        save_message(message)
 
                 # Update last data points
                 if ticker not in last_data_points:
